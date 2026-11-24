@@ -1,4 +1,5 @@
-import { getCreature, mealReaction } from './creature.js';
+import { getCreature, mealReaction, variants } from './creature.js';
+import { mealAscii } from './meal-ascii.js';
 import { store } from './store.js';
 
 const screen = document.querySelector('#screen');
@@ -8,13 +9,15 @@ const demo = new URLSearchParams(location.search).get('demo') === '1';
 const dayFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'full' });
 const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' });
 const photoURLs = new Set();
+const photoInputs = [...document.querySelectorAll('input[type=file]')];
 
 let state;
 let draft = newDraft();
 let savingMeal = false;
-let reaction;
+let talking = false;
+let mealScene;
 let moodOverride;
-let photoSelection = 0;
+let loadingPhoto = false;
 let returnMealId;
 
 function newDraft() {
@@ -45,18 +48,125 @@ function releasePhotos() {
   photoURLs.clear();
 }
 
+function renderAdoption() {
+  screen.innerHTML = `
+    <div class="screen-bar"><span class="eyebrow">Nursery</span></div>
+    <div class="intro"><h1>Pick your Scraps.</h1><p>Tap a little creature to adopt it.</p></div>
+    <ul class="adoption-grid"></ul>
+    <p class="failure" role="alert"></p>`;
+  const grid = screen.querySelector('.adoption-grid');
+  const failure = screen.querySelector('.failure');
+  for (const variant of variants) {
+    const item = document.createElement('li');
+    item.innerHTML = `<button type="button" class="adoption-card"><span class="miniature" aria-hidden="true"></span><strong></strong></button>`;
+    const button = item.querySelector('button');
+    button.querySelector('.miniature').textContent = variant.miniature.join('\n');
+    button.querySelector('strong').textContent = variant.name;
+    button.setAttribute('aria-label', `Adopt ${variant.name}. ${variant.description}.`);
+    button.addEventListener('click', async () => {
+      const cards = grid.querySelectorAll('button');
+      cards.forEach((card) => { card.disabled = true; });
+      failure.textContent = '';
+      try {
+        state.pet = await store.adopt({ variant: variant.id, name: variant.name });
+        navigate('pet');
+        announce(`${state.pet.name} is home.`);
+      } catch {
+        cards.forEach((card) => { card.disabled = false; });
+        button.focus();
+        failure.textContent = 'Couldn’t adopt this Scraps. Try again.';
+      }
+    });
+    grid.append(item);
+  }
+}
+
+function mealInProgress() {
+  return mealScene && mealScene.phase !== 'done';
+}
+
 function updateScene() {
   const scene = screen.querySelector('.habitat');
   if (!scene) return;
-  const view = getCreature(state.pet, state.meals, { override: moodOverride, reaction });
+  const phase = mealScene?.phase ?? '';
+  const chewing = phase === 'bite';
+  const view = getCreature(state.pet, state.meals, { override: moodOverride, chewing });
   const creature = scene.querySelector('.creature');
+  const talk = scene.querySelector('.creature-touch');
   const condition = screen.querySelector('.condition');
+  const dialogue = screen.querySelector('.dialogue');
+  const food = scene.querySelector('.scene-food');
+
   creature.textContent = view.art;
-  creature.setAttribute('aria-label', view.description);
-  condition.textContent = view.label;
+  talk.setAttribute('aria-label', `Talk to ${state.pet.name}. ${view.description}`);
+  talk.setAttribute('aria-expanded', String(talking));
+  talk.setAttribute('aria-disabled', String(Boolean(mealInProgress())));
+  condition.textContent = `${view.label} · ${view.bodyLabel}`;
   condition.dataset.mood = view.mood;
-  screen.querySelector('h1').textContent = view.title;
-  screen.querySelector('.scene-caption p').textContent = view.line;
+  screen.querySelector('h1').textContent = mealInProgress() ? `A bite for ${state.pet.name}.` : view.title;
+  screen.querySelector('.talk-hint').hidden = talking;
+  dialogue.hidden = !talking;
+  dialogue.querySelector('.speaker').textContent = state.pet.name;
+  dialogue.querySelector('.dialogue-line').textContent = {
+    photo: 'One photo. Let me turn that into a bite…',
+    ascii: 'There! Now that looks like food to me.',
+    bite: 'Nom!',
+    done: mealScene?.reaction,
+  }[phase] ?? view.speech;
+  dialogue.querySelector('.picker-buttons').hidden = Boolean(mealScene);
+  dialogue.querySelector('.resume-draft').hidden = Boolean(mealScene) || !draft.photo;
+  dialogue.querySelector('.close-dialogue').textContent = mealInProgress() ? 'Skip animation' : phase === 'done' ? 'Done' : 'Later';
+
+  food.hidden = !mealInProgress();
+  if (food.dataset.phase !== phase) {
+    const photo = food.querySelector('img');
+    const ascii = food.querySelector('pre');
+    food.dataset.phase = phase;
+    if (phase === 'photo') photo.src = photoURL(mealScene.photo);
+    else if (photo.hasAttribute('src')) {
+      URL.revokeObjectURL(photo.src);
+      photoURLs.delete(photo.src);
+      photo.removeAttribute('src');
+    }
+    photo.hidden = phase !== 'photo';
+    ascii.hidden = phase !== 'ascii' && !chewing;
+    ascii.textContent = mealScene?.ascii ?? '';
+    scene.classList.toggle('has-food', Boolean(mealInProgress()));
+  }
+}
+
+function setTalking(open) {
+  talking = open;
+  if (!open) mealScene = undefined;
+  updateScene();
+  const target = screen.querySelector(open ? '.dialogue' : '.creature-touch');
+  target.focus({ preventScroll: !open });
+}
+
+function finishMealScene(sequence) {
+  if (mealScene !== sequence || sequence.phase === 'done') return;
+  sequence.phase = 'done';
+  updateScene();
+  if (selectedRoute() === 'pet') announce(sequence.reaction);
+}
+
+function playMealScene(photo, ascii, reaction) {
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sequence = { photo, ascii, reaction, phase: reducedMotion ? 'ascii' : 'photo' };
+  mealScene = sequence;
+  talking = true;
+  if (reducedMotion) {
+    window.setTimeout(() => finishMealScene(sequence), 1250);
+    return;
+  }
+  for (const [delay, phase] of [[650, 'ascii'], [1700, 'bite']]) {
+    window.setTimeout(() => {
+      if (mealScene !== sequence || sequence.phase === 'done') return;
+      sequence.phase = phase;
+      updateScene();
+    }, delay);
+  }
+  window.setTimeout(() => finishMealScene(sequence), 2300);
 }
 
 function renderPet() {
@@ -64,35 +174,41 @@ function renderPet() {
     <div class="screen-bar"><span class="eyebrow">Habitat</span><span class="condition"></span></div>
     <figure class="habitat">
       <div class="habitat-interior">
-        <pre class="creature" role="img"></pre>
+        <button type="button" class="creature-touch" aria-controls="pet-dialogue">
+          <span class="creature" aria-hidden="true"></span>
+          <span class="talk-hint" aria-hidden="true">[ Tap to talk ]</span>
+        </button>
+        <div class="scene-food" aria-hidden="true" hidden><img alt="" hidden><pre hidden></pre></div>
         <div class="scene-floor" aria-hidden="true"></div>
       </div>
     </figure>
-    <div class="scene-caption"><h1></h1><p></p></div>
-    <div class="scene-action"></div>`;
-  const action = screen.querySelector('.scene-action');
+    <div class="scene-caption"><h1></h1></div>
+    <section class="dialogue" id="pet-dialogue" aria-labelledby="speaker" aria-describedby="pet-speech" tabindex="-1" hidden>
+      <h2 id="speaker" class="speaker"></h2><p id="pet-speech" class="dialogue-line"></p>
+      <div class="picker-buttons">
+        <button class="button primary" type="button" data-picker="camera">Take photo</button>
+        <button class="button" type="button" data-picker="library">Choose photo</button>
+      </div>
+      <p class="message" data-photo-error role="alert"></p>
+      <div class="dialogue-actions">
+        <a class="text-button resume-draft" href="#feed" hidden>Resume meal</a>
+        <button type="button" class="text-button close-dialogue">Later</button>
+      </div>
+    </section>`;
+  const talk = screen.querySelector('.creature-touch');
+  const dialogue = screen.querySelector('.dialogue');
+  talk.addEventListener('click', () => {
+    if (!mealInProgress()) setTalking(!talking);
+  });
+  dialogue.querySelector('.close-dialogue').addEventListener('click', () => {
+    if (mealInProgress()) finishMealScene(mealScene);
+    else setTalking(false);
+  });
+  dialogue.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') setTalking(false);
+  });
   updateScene();
 
-  if (!state.pet) {
-    action.innerHTML = `<button type="button" class="button primary block">Adopt Scraps <span class="action-mark" aria-hidden="true">+</span></button>
-      <p class="message" role="alert"></p>`;
-    const button = action.querySelector('button');
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      action.querySelector('.message').textContent = '';
-      try {
-        state.pet = await store.adopt();
-        navigate('pet');
-        announce('Scraps has hatched.');
-      } catch {
-        action.querySelector('.message').textContent = 'Scraps couldn’t hatch. Try adopting again.';
-        button.disabled = false;
-      }
-    });
-    return;
-  }
-
-  action.innerHTML = `<a class="button primary block" href="#feed">Feed <span class="action-mark" aria-hidden="true">+</span></a>`;
   if (demo) {
     const controls = document.createElement('details');
     controls.className = 'demo-controls';
@@ -105,9 +221,8 @@ function renderPet() {
       </div>`;
     controls.addEventListener('click', (event) => {
       const button = event.target.closest('[data-mood]');
-      if (!button) return;
+      if (!button || mealInProgress()) return;
       moodOverride = button.dataset.mood;
-      reaction = undefined;
       updateScene();
       announce(screen.querySelector('h1').textContent);
     });
@@ -125,11 +240,75 @@ function loadPhoto(file) {
     const image = new Image();
     const finish = (callback) => {
       URL.revokeObjectURL(url);
-      callback();
+      callback(image);
     };
     image.onload = () => finish(resolve);
     image.onerror = () => finish(reject);
     image.src = url;
+  });
+}
+
+function setPhotoError(message) {
+  const error = screen.querySelector('[data-photo-error]');
+  if (error) error.textContent = message;
+  screen.querySelector('.photo-frame')?.setAttribute('aria-invalid', String(Boolean(message)));
+}
+
+function showDraftPhoto() {
+  const frame = screen.querySelector('.entry-form .photo-frame');
+  if (!frame) return;
+  const preview = frame.querySelector('img');
+  if (preview.hasAttribute('src')) {
+    URL.revokeObjectURL(preview.src);
+    photoURLs.delete(preview.src);
+    preview.removeAttribute('src');
+  }
+  if (draft.photo) preview.src = photoURL(draft.photo);
+  preview.hidden = !draft.photo;
+  frame.querySelector('.photo-placeholder').hidden = Boolean(draft.photo);
+  screen.querySelector('.photo-remove').hidden = !draft.photo;
+}
+
+function updatePhotoControls() {
+  for (const button of screen.querySelectorAll('[data-picker], .photo-remove, .entry-form [type="submit"]')) {
+    button.disabled = loadingPhoto;
+  }
+}
+
+screen.addEventListener('click', (event) => {
+  const picker = event.target.closest('[data-picker]');
+  if (picker && !loadingPhoto) document.getElementById(picker.dataset.picker).click();
+});
+
+for (const input of photoInputs) {
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    input.value = '';
+    if (!file || savingMeal || loadingPhoto) return;
+    const route = selectedRoute();
+    loadingPhoto = true;
+    updatePhotoControls();
+    setPhotoError('');
+    try {
+      const image = await loadPhoto(file);
+      let ascii;
+      try {
+        ascii = mealAscii(image);
+      } catch {
+        ascii = ' .------. \n( :::::::: )\n \\________/';
+      }
+      draft.photo = file;
+      draft.ascii = ascii;
+      if (selectedRoute() === 'pet' && route === 'pet' && talking) navigate('feed');
+      else if (selectedRoute() === 'feed') showDraftPhoto();
+      else if (selectedRoute() === 'pet') updateScene();
+      announce('Meal photo ready.');
+    } catch {
+      if (selectedRoute() === route) setPhotoError('This photo couldn’t be opened. Try a different photo.');
+    } finally {
+      loadingPhoto = false;
+      updatePhotoControls();
+    }
   });
 }
 
@@ -141,7 +320,7 @@ function renderFeed() {
       <fieldset><div class="form-stack">
         <div class="field">
           <p class="field-heading" id="photo-label">Meal photo</p>
-          <div role="group" aria-labelledby="photo-label" aria-describedby="photo-error">
+          <div role="group" aria-labelledby="photo-label" aria-describedby="feed-photo-error">
             <div class="photo-frame">
               <p class="photo-placeholder"><span aria-hidden="true">[ + ]</span> No photo yet</p>
               <img alt="Your selected meal photo" hidden>
@@ -150,10 +329,8 @@ function renderFeed() {
               <button class="button" type="button" data-picker="camera">Take photo</button>
               <button class="button" type="button" data-picker="library">Choose photo</button>
             </div>
-            <input id="camera" type="file" accept="image/*" capture="environment" hidden>
-            <input id="library" type="file" accept="image/*" hidden>
             <button type="button" class="text-button photo-remove" hidden>Remove photo</button>
-            <p id="photo-error" class="message" role="alert"></p>
+            <p id="feed-photo-error" data-photo-error class="message" role="alert"></p>
           </div>
         </div>
         <div class="field">
@@ -178,76 +355,21 @@ function renderFeed() {
   const fieldset = form.querySelector('fieldset');
   const title = form.querySelector('#meal-title');
   const ingredients = form.querySelector('#ingredients');
-  const photoFrame = form.querySelector('.photo-frame');
-  const preview = photoFrame.querySelector('img');
-  const photoError = form.querySelector('#photo-error');
   const titleError = form.querySelector('#title-error');
   const remove = form.querySelector('.photo-remove');
   const submit = form.querySelector('[type="submit"]');
   const failure = form.querySelector('.failure');
   const activeDraft = draft;
-  let checkingPhoto = false;
-  let previewURL;
 
   title.value = activeDraft.title;
   ingredients.value = activeDraft.ingredients;
   fieldset.disabled = savingMeal;
-  form.querySelectorAll('[data-picker]').forEach((button) => {
-    button.addEventListener('click', () => form.querySelector(`#${button.dataset.picker}`).click());
-  });
-
-  function showPhoto() {
-    if (previewURL) {
-      URL.revokeObjectURL(previewURL);
-      photoURLs.delete(previewURL);
-    }
-    previewURL = activeDraft.photo ? photoURL(activeDraft.photo) : undefined;
-    if (previewURL) preview.src = previewURL;
-    else preview.removeAttribute('src');
-    preview.hidden = !previewURL;
-    photoFrame.querySelector('.photo-placeholder').hidden = Boolean(previewURL);
-    remove.hidden = !previewURL;
-  }
-
-  function setPhotoError(message) {
-    photoError.textContent = message;
-    photoFrame.setAttribute('aria-invalid', String(Boolean(message)));
-  }
-
-  async function selectPhoto(event) {
-    const input = event.currentTarget;
-    const file = input.files[0];
-    input.value = '';
-    if (!file) return;
-    const selection = ++photoSelection;
-    checkingPhoto = true;
-    submit.disabled = true;
-    setPhotoError('');
-    try {
-      await loadPhoto(file);
-      if (selection !== photoSelection || !form.isConnected) return;
-      activeDraft.photo = file;
-      showPhoto();
-      announce('Meal photo ready.');
-    } catch {
-      if (selection === photoSelection && form.isConnected) setPhotoError('This photo couldn’t be opened. Try a different photo.');
-    } finally {
-      if (selection === photoSelection) {
-        checkingPhoto = false;
-        submit.disabled = false;
-      }
-    }
-  }
-
-  showPhoto();
-  form.querySelectorAll('[type="file"]').forEach((input) => input.addEventListener('change', selectPhoto));
+  showDraftPhoto();
   remove.addEventListener('click', () => {
-    photoSelection += 1;
-    checkingPhoto = false;
-    submit.disabled = false;
     activeDraft.photo = null;
+    activeDraft.ascii = undefined;
     setPhotoError('');
-    showPhoto();
+    showDraftPhoto();
     form.querySelector('[data-picker="camera"]').focus();
   });
   title.addEventListener('input', () => {
@@ -261,7 +383,7 @@ function renderFeed() {
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (savingMeal || checkingPhoto) return;
+    if (savingMeal || loadingPhoto) return;
     const mealTitle = title.value.trim();
     const needsPhoto = !activeDraft.photo;
     setPhotoError(needsPhoto ? 'Add a photo of this meal.' : '');
@@ -285,18 +407,22 @@ function renderFeed() {
       const { pet, meal } = await store.saveMeal({
         id: activeDraft.id, title: mealTitle, ingredients: parseIngredients(ingredients.value), photo: activeDraft.photo,
       });
-      reaction = { ...mealReaction(meal, state.meals, pet.mealsFed), until: Date.now() + 6500 };
+      const reaction = mealReaction(meal, state.meals, pet);
       state.pet = pet;
       state.meals = [meal, ...state.meals.filter(({ id }) => id !== meal.id)];
       moodOverride = undefined;
       draft = newDraft();
-      announce(`Meal saved. ${reaction.title} ${reaction.line}`);
-      window.setTimeout(updateScene, 6550);
-      if (selectedRoute() === 'feed') navigate('pet');
-      else render(false);
+      if (selectedRoute() === 'feed' || selectedRoute() === 'pet') {
+        playMealScene(activeDraft.photo, activeDraft.ascii, reaction);
+        announce('Meal saved. Your Scraps turns the photo into a bite.');
+        navigate('pet');
+      } else {
+        announce(`Meal saved. ${reaction}`);
+        render(false);
+      }
     } catch {
       if (form.isConnected) failure.textContent = 'The meal couldn’t be saved. Your draft is still here. Try again.';
-      else announce('The meal couldn’t be saved. Reopen Feed to retry your draft.');
+      else announce('The meal couldn’t be saved. Talk to your Scraps to resume the draft.');
     } finally {
       savingMeal = false;
       const visibleForm = screen.querySelector('.entry-form');
@@ -319,8 +445,8 @@ function renderMeals() {
     content.innerHTML = `
       <div class="empty">
         <pre aria-hidden="true">.-----------.\n(             )\n '-._______.-'</pre>
-        <h2>No meals yet</h2><p>Your first meal will show up here.</p>
-        <a href="#feed" class="button primary">Feed Scraps</a>
+        <h2>No meals yet</h2><p>Tap your Scraps in the habitat to share a meal.</p>
+        <a href="#pet" class="button primary">Back to pet</a>
       </div>`;
     return;
   }
@@ -354,10 +480,17 @@ function renderMeals() {
   }
 }
 
+const nutritionLabels = {
+  light: 'Estimated light meal',
+  balanced: 'Estimated balanced meal',
+  rich: 'Estimated rich meal',
+  unknown: 'Meal type unclear',
+};
+
 function renderDetail(meal) {
   screen.innerHTML = `
     <div class="screen-bar"><span class="eyebrow">Food log</span><a href="#meals" class="button">Back to meals</a></div>
-    <div class="intro"><h1></h1><p><time></time></p></div>
+    <div class="intro"><h1></h1><p><time></time></p><p class="meal-nutrition"></p></div>
     <div class="meal-content">
       <img class="meal-photo">
       <section class="ingredient-section" aria-labelledby="ingredient-heading">
@@ -387,6 +520,9 @@ function renderDetail(meal) {
   const time = screen.querySelector('time');
   time.dateTime = meal.eatenAt;
   time.textContent = dayFormat.format(new Date(meal.eatenAt));
+  const nutrition = screen.querySelector('.meal-nutrition');
+  const updateNutrition = () => { nutrition.textContent = nutritionLabels[meal.nutrition.kind]; };
+  updateNutrition();
   const photo = screen.querySelector('.meal-photo');
   if (meal.photo) {
     photo.src = photoURL(meal.photo);
@@ -439,6 +575,7 @@ function renderDetail(meal) {
     try {
       meal = await store.updateIngredients(meal.id, parseIngredients(textarea.value));
       state.meals = state.meals.map((entry) => entry.id === meal.id ? meal : entry);
+      updateNutrition();
       showIngredients(meal.ingredients);
       if (form.isConnected) toggleEditing(false);
       announce('Ingredients saved.');
@@ -464,16 +601,19 @@ function render(focus) {
     if (link.hash === `#${route}`) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
-  if (route === 'feed') renderFeed();
+  if (!state.pet) renderAdoption();
+  else if (route === 'feed') renderFeed();
   else if (route === 'meals') renderMeals();
   else if (meal) renderDetail(meal);
   else renderPet();
+  updatePhotoControls();
   if (focus) {
     window.scrollTo(0, 0);
     const previous = route === 'meals' && returnMealId
       ? [...screen.querySelectorAll('.meal-row')].find((link) => link.hash === `#meal/${returnMealId}`)
       : null;
-    (previous || screen).focus();
+    const dialogue = route === 'pet' && mealInProgress() ? screen.querySelector('.dialogue') : null;
+    (previous || dialogue || screen).focus();
   }
   if (!meal) returnMealId = undefined;
 }

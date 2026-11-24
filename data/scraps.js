@@ -1,3 +1,5 @@
+import { creatures, interpretMeal } from './game.js';
+
 const DATABASE = 'scraps';
 const VERSION = 2;
 const PET_ID = 'scraps';
@@ -89,6 +91,10 @@ function normalizeIngredients(values) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+function mealWithPhoto(meal, photo) {
+  return { ...meal, nutrition: meal.nutrition ?? interpretMeal(meal), photo: photo ?? null };
+}
+
 export function load() {
   return transact(['pet', 'meals', 'photos'], 'readonly', (store, read, finish) => {
     const pet = store('pet').get(PET_ID);
@@ -97,20 +103,24 @@ export function load() {
       const byId = new Map(photos.map(({ id, photo }) => [id, photo]));
       finish({
         pet: pet.result ?? null,
-        meals: meals.result.map((meal) => ({ ...meal, photo: byId.get(meal.id) ?? null })),
+        meals: meals.result.map((meal) => mealWithPhoto(meal, byId.get(meal.id))),
       });
     });
   });
 }
 
-export function adopt() {
+export async function adopt({ variant = 'crumb', name } = {}) {
+  if (!Object.hasOwn(creatures, variant)) {
+    throw new ScrapsError('UNKNOWN_CREATURE', 'Choose one of the available creatures.');
+  }
   return transact(['pet'], 'readwrite', (store, read, finish) => {
     const pets = store('pet');
     read(pets.get(PET_ID), (existing) => {
       if (existing) return finish(existing);
       const pet = {
         id: PET_ID,
-        name: 'Scraps',
+        name: (typeof name === 'string' && name.trim()) || creatures[variant].name,
+        variant,
         adoptedAt: new Date().toISOString(),
         lastFedAt: null,
         mealsFed: 0,
@@ -143,12 +153,12 @@ export async function saveMeal({ id = crypto.randomUUID(), title, photo, ingredi
       const pet = petRequest.result;
       if (!pet) throw new ScrapsError('PET_REQUIRED', 'Adopt Scraps before feeding.');
       if (existing) {
-        read(photos.get(id), (saved) => finish({ pet, meal: { ...existing, photo: saved?.photo ?? null } }));
+        read(photos.get(id), (saved) => finish({ pet, meal: mealWithPhoto(existing, saved?.photo) }));
         return;
       }
 
       const eatenAt = new Date().toISOString();
-      const entry = { ...meal, eatenAt };
+      const entry = { ...meal, eatenAt, nutrition: interpretMeal(meal) };
       const fed = { ...pet, lastFedAt: eatenAt, mealsFed: pet.mealsFed + 1 };
       meals.add(entry);
       photos.add({ id, photo });
@@ -166,6 +176,7 @@ export async function updateIngredients(id, ingredients) {
     read(meals.get(id), (meal) => {
       if (!meal) throw new ScrapsError('MEAL_NOT_FOUND', 'This meal could not be found.');
       const updated = { ...meal, ingredients: names };
+      updated.nutrition = interpretMeal(updated);
       meals.put(updated);
       finish({ ...updated, photo: photo.result?.photo ?? null });
     });

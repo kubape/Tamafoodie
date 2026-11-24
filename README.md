@@ -10,20 +10,20 @@ For GitHub Pages, set **Settings → Pages → Deploy from a branch** to `main` 
 
 ## Screens and interactions
 
-- **Adopt and pet home.** Adopt Scraps to hatch the egg and reveal the hungry creature. Feed stays within thumb reach on the pet screen. Hungry, recently fed, and craving each have different ASCII art and screen reader descriptions. Scraps grows tufts after three meals.
-- **Feed.** Take a photo or choose one from the library. Preview it, supply a title, and optionally add ingredients separated by commas or new lines. A successful save returns to the habitat for a short creature reaction. A failed save keeps the photo, title, and ingredients ready to retry. Drafts stay in memory for the current session.
+- **Adopt and pet home.** Tap one of six miniature Scraps to adopt it. Tap the creature in its habitat to hear what it says when hungry, full, or craving a particular dish. Appearance and screen reader descriptions follow its mood. The creature grows tufts after three meals.
+- **Share a meal.** The dialogue offers camera and photo library options. Choose a photo, supply a title, and optionally add ingredients separated by commas or new lines. After saving, the habitat shows the photo turn into ASCII, then the creature takes a bite and reacts. The animation can be skipped and respects reduced-motion preferences. A failed save keeps the draft ready to retry in the current session.
 - **Meal history and detail.** History starts empty and groups saved meals newest first by the device’s local date. Thumbnails, titles, and times support scanning. Open a meal to see the full photo and add, edit, or clear its ingredients.
 
 ## Data records and storage
 
 | Record | Fields |
 | --- | --- |
-| Pet | `id`, `name`, `adoptedAt`, `lastFedAt` (nullable), `mealsFed` |
-| Meal | `id`, `title`, `ingredients` (`string[]`), `photo` (`File` or `Blob`), `eatenAt` |
-| Creature view | `mood`, `label`, `title`, `line`, `description`, `art` |
+| Pet | `id`, `name`, `variant` (optional on older records), `adoptedAt`, `lastFedAt` (nullable), `mealsFed` |
+| Meal | `id`, `title`, `ingredients` (`string[]`), `photo` (`File` or `Blob`), `eatenAt`, `nutrition` |
+| Creature view | `mood`, `label`, `title`, `speech`, `description`, `art`, `bodyLabel` |
 
-Timestamps are ISO strings. `eatenAt` uses save time in this prototype. In `creature.js`, Scraps stays full for four hours after a meal, then craves its most frequently logged dish until 18 hours after feeding. Ties favor the dish eaten most recently. Reactions use mock text and recognize repeat titles.
+Timestamps are ISO strings. `eatenAt` uses save time. The game estimates the meal type from the title and ingredients. Each creature has food preferences and can learn to crave repeat meals. The habitat shows tummy state and body condition as meals and elapsed time change them.
 
 `store.js` connects the screens to the IndexedDB data layer. The meal ID exists before submission so retries can reuse it. The meal, photo, and pet update commit together. The view creates object URLs from stored photos. See the [storage API](data/README.md) for the data contract and upgrade behavior.
 
-For a future cloud service, keep the storage methods in `store.js` as the interface for the screens. The `getCreature()` and `mealReaction()` calls in `app.js` are the integration points for server-calculated moods, cravings, and reactions.
+For a future cloud service, keep the storage methods in `store.js` as the interface for the screens. The `getCreature()` and `mealReaction()` calls in `app.js` are the integration points for server-calculated moods, cravings, and reactions. `meal-ascii.js` samples the photo in the browser for the animation. Meal history uses the original photo file.

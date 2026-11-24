@@ -1,17 +1,6 @@
+import { creatures, feedingSpeech, getPetState } from './data/game.js';
+
 const art = {
-  dormant: [
-    '           .           ',
-    '          / \\          ',
-    '        .\'   \`.        ',
-    '       /       \\       ',
-    '      /    .    \\      ',
-    '     |    /_     |     ',
-    '     |      /    |     ',
-    '      \\         /      ',
-    '    .  \`-.___.-\'       ',
-    '    ___/ /_\\ \\____     ',
-    ' .-================-.  ',
-  ],
   hungry: [
     '                       ',
     '     /\\         /\\     ',
@@ -53,65 +42,88 @@ const art = {
   ],
 };
 
+export const variants = [
+  {
+    id: 'crumb', description: 'Pointy ears and tiny paws',
+    miniature: ['/\\___/\\', '( o o )', ' / ~ \\ '],
+  },
+  {
+    id: 'bean', description: 'A smooth, round head',
+    miniature: [' .---. ', '( o o )', ' (___) '],
+    crown: ['      .---------.      ', '    .-           -.    '],
+  },
+  {
+    id: 'pip', description: 'Two tall antennae',
+    miniature: [' o   o ', ' |___| ', '( . . )'],
+    crown: ['     o           o     ', '     |___________|     '],
+  },
+  {
+    id: 'moss', description: 'Three jagged spikes',
+    miniature: [' /^M^\\ ', '( - - )', ' \\___/ '],
+    crown: ['      /\\   /\\   /\\     ', '     /  \\_/  \\_/  \\    '],
+  },
+  {
+    id: 'nib', description: 'One eye and a crooked horn',
+    miniature: ['   /|  ', ' _( O )', ' \\___/ '],
+    crown: ['              /|       ', '      .------/ |       '],
+    cyclops: true,
+  },
+  {
+    id: 'mochi', description: 'Long, floppy ears',
+    miniature: [' __ __ ', '/  V  \\', 'u(o o)u'],
+    crown: ['    ___       ___      ', '  /     \\___/     \\    '],
+    ears: [' /  /           \\  \\   ', '(  |             |  )  ', ' \\_|             |_/   '],
+  },
+].map((variant) => ({ ...variant, name: creatures[variant.id].name }));
+
 const moods = {
-  dormant: { label: 'Dormant', title: 'Something’s stirring.', line: 'A small creature is waiting to meet you.', description: 'A speckled egg with a crack in its shell rests on a nest.' },
-  hungry: { label: 'Hungry', title: 'Scraps is hungry.', line: 'Two big eyes. One very empty belly.', description: 'Scraps crouches with wide eyes, a wobbly mouth, and a drawn-in belly.' },
-  fed: { label: 'Recently fed', title: 'Scraps is full.', line: 'A round belly and a very pleased little face.', description: 'Scraps sits upright with gleeful closed eyes, a smile, and a round belly.' },
-  craving: { label: 'Craving', title: 'Scraps wants seconds.', description: 'Scraps leans forward with one wide eye, pursed lips, and a raised paw.' },
+  hungry: { label: 'Hungry', status: 'is hungry.', pose: 'crouches with a wobbly mouth and a drawn-in belly.' },
+  fed: { label: 'Full', status: 'is full.', pose: 'sits upright with a smile and a round belly.' },
+  craving: { label: 'Craving', status: 'wants seconds.', pose: 'leans forward with pursed lips and a raised paw.' },
 };
 
-const hour = 60 * 60 * 1000;
-const dishKey = (title) => title.toLowerCase().replace(/\s+/g, ' ').trim();
+const bodyLabels = { 'in-shape': 'In shape', starving: 'Starving', 'getting-fat': 'Getting rounder' };
+const demoSpeech = {
+  hungry: 'Finally! I was starving over here.',
+  fed: 'I am soooo full.',
+  craving: 'Any chance there’s more of my favorite?',
+};
 
-function familiarMeal(meals) {
-  const dishes = new Map();
-  for (const meal of meals) {
-    const key = dishKey(meal.title);
-    const entry = dishes.get(key) ?? { title: meal.title, count: 0, latest: '' };
-    entry.count += 1;
-    if (meal.eatenAt > entry.latest) {
-      entry.title = meal.title;
-      entry.latest = meal.eatenAt;
-    }
-    dishes.set(key, entry);
-  }
-  return [...dishes.values()].sort((a, b) => b.count - a.count || b.latest.localeCompare(a.latest))[0]?.title;
-}
-
-export function getCreature(pet, meals, { now = Date.now(), override, reaction } = {}) {
-  const hoursSinceMeal = pet?.lastFedAt ? (now - Date.parse(pet.lastFedAt)) / hour : Infinity;
-  const favorite = familiarMeal(meals);
-  let mood = 'dormant';
-  if (pet) {
-    if (reaction && reaction.until > now) mood = 'fed';
-    else if (override) mood = override;
-    else if (hoursSinceMeal < 4) mood = 'fed';
-    else if (favorite && hoursSinceMeal < 18) mood = 'craving';
-    else mood = 'hungry';
-  }
-
-  const view = { ...moods[mood], mood };
+export function getCreature(pet, meals, { now = Date.now(), override, chewing = false } = {}) {
+  const state = getPetState(pet, meals, { now });
+  const mood = chewing ? 'fed' : override || state.mood;
+  const { label, status, pose } = !override && !chewing && mood === 'hungry' && state.tummy === 'peckish'
+    ? { ...moods.hungry, label: 'Peckish', status: 'could go for a bite.' }
+    : moods[mood];
+  const variant = variants.find(({ id }) => id === pet.variant) ?? variants[0];
   const lines = [...art[mood]];
-  if (pet?.mealsFed >= 3) {
+  if (variant.crown) {
+    const eyes = variant.cyclops
+      ? (mood === 'fed' ? '    ^    ' : '    O    ')
+      : { hungry: ' o     o ', fed: ' ^     ^ ', craving: ' o     O ' }[mood];
+    const mouth = { hungry: '    ~    ', fed: ' .  w  . ', craving: '     :>  ' }[mood];
+    const cheeks = variant.ears ?? [
+      '    /             \\    ',
+      '   |               |   ',
+      '   |               |   ',
+    ];
+    const face = ['         ', eyes, mouth].map((row, index) => cheeks[index].slice(0, 7) + row + cheeks[index].slice(16));
+    lines.splice(1, 6, ...variant.crown, ...face, '    \\_____________/    ');
+  }
+  if (chewing) lines[5] = lines[5].replace('w', 'O');
+
+  let description = `${pet.name} ${pose} ${variant.description}.`;
+  if (chewing) description = `${pet.name} opens its mouth for a bite. ${variant.description}.`;
+  if (pet.mealsFed >= 3) {
     lines[0] = '     +           +     ';
-    view.description += ' Little tufts have grown above its ears.';
+    description += ' Little tufts have grown above its head.';
   }
-  if (mood === 'craving') view.line = `It keeps thinking about “${favorite ?? 'buttered toast'}”.`;
-  if (reaction && reaction.until > now) {
-    view.title = reaction.title;
-    view.line = reaction.line;
-  }
-  view.art = lines.join('\n');
-  return view;
+  return {
+    label, mood, description, title: `${pet.name} ${status}`,
+    speech: override ? demoSpeech[mood] : state.speech,
+    bodyLabel: bodyLabels[state.bodyCondition],
+    art: lines.map((line) => line.padEnd(23)).join('\n'),
+  };
 }
 
-export function mealReaction(meal, previousMeals, mealsFed) {
-  const familiar = previousMeals.some(({ title }) => dishKey(title) === dishKey(meal.title));
-  if (mealsFed === 3) return { title: 'Scraps grew tufts!', line: 'Three meals in, and it’s growing into its ears.' };
-  if (familiar) return { title: 'Scraps knows that one!', line: 'A happy little wiggle for a familiar meal.' };
-  const reactions = [
-    { title: 'Scraps goes chomp!', line: 'It puffs up like a tiny bread roll.' },
-    { title: 'Scraps does a shimmy!', line: 'That was worth a whole-body wiggle.' },
-  ];
-  return reactions[(mealsFed - 1) % reactions.length];
-}
+export { feedingSpeech as mealReaction };
