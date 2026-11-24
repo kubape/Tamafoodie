@@ -1,4 +1,7 @@
+import { estimateNutrition, NUTRITION_VERSION, words } from './nutrition.js';
+
 const HOUR = 60 * 60 * 1000;
+const NUTRITION_WINDOW = 24 * HOUR;
 
 export const creatures = {
   crumb: { name: 'Crumb', likes: 'grains', dislikes: 'seafood' },
@@ -30,13 +33,11 @@ const portions = {
   unknown: { fullness: 40, recovery: 18 },
 };
 
-function words(text) {
-  return text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-}
-
 export function interpretMeal({ title, ingredients = [] }) {
   const text = words([title, ...ingredients].join(' '));
-  const tags = Object.entries(foods).filter(([, pattern]) => pattern.test(text)).map(([tag]) => tag);
+  const { estimate, tags: estimatedTags } = estimateNutrition(title, ingredients);
+  const tags = [...new Set([...estimatedTags, ...Object.entries(foods)
+    .filter(([, pattern]) => pattern.test(text)).map(([tag]) => tag)])];
   if (tags.includes('sweets') && !tags.includes('rich')) tags.push('rich');
   const produce = tags.includes('vegetables') || tags.includes('fruit');
   const starch = tags.includes('grains');
@@ -46,7 +47,20 @@ export function interpretMeal({ title, ingredients = [] }) {
   if (tags.includes('rich')) kind = 'rich';
   else if (Number(produce) + Number(starch) + Number(protein) >= 2) kind = 'balanced';
   else if (produce) kind = 'light';
-  return { kind, tags };
+  return { version: NUTRITION_VERSION, kind, tags, estimate };
+}
+
+export function mealNutrition(meal) {
+  return meal.nutrition?.version === NUTRITION_VERSION ? meal.nutrition : interpretMeal(meal);
+}
+
+function nutritionScore({ estimate, tags, kind }) {
+  const portion = Math.max(150, estimate.calories) / 400;
+  const protein = Math.min(1, estimate.protein / (18 * portion));
+  const fiber = Math.min(1, estimate.fiber / (5 * portion));
+  const variety = kind === 'balanced' ? 20 : tags.includes('fruit') || tags.includes('vegetables') ? 12 : 5;
+  const sweets = tags.includes('sweets') ? 12 : 0;
+  return 25 + 28 * protein + 27 * fiber + variety - sweets;
 }
 
 function taste(pet, nutrition) {
@@ -66,7 +80,10 @@ function elapsed(state, at) {
 }
 
 function applyMeal(state, nutrition) {
-  const portion = portions[nutrition.kind];
+  const portion = nutrition.estimate ? {
+    fullness: Math.max(8, Math.min(90, Math.round(nutrition.estimate.calories / 7.5))),
+    recovery: Math.round(10 + nutritionScore(nutrition) / 4),
+  } : portions[nutrition.kind];
   const total = state.fullness + portion.fullness;
   const surplus = Math.max(0, total - 100) * 0.45;
   if (state.reserve < 0) state.reserve = Math.min(0, state.reserve + portion.recovery);
@@ -83,10 +100,18 @@ export function getPetState(pet, meals, { now = Date.now() } = {}) {
   const start = Math.min(now, Number.isFinite(adoptedAt) ? adoptedAt : history[0]?.at ?? now);
   const state = { at: start, fullness: 25, reserve: 0 };
   const favoriteMeals = new Map();
+  let nutritionTotal = 0;
+  let nutritionWeight = 0;
   for (const { meal, at } of history) {
     elapsed(state, Math.min(now, Math.max(start, at)));
-    const nutrition = meal.nutrition ?? interpretMeal(meal);
+    const nutrition = mealNutrition(meal);
     applyMeal(state, nutrition);
+    const age = Math.max(0, now - at);
+    if (nutrition.estimate && age < NUTRITION_WINDOW) {
+      const weight = 1 - age / NUTRITION_WINDOW;
+      nutritionTotal += nutritionScore(nutrition) * weight;
+      nutritionWeight += weight;
+    }
     if (taste(pet, nutrition) === 'disliked') continue;
     const key = words(meal.title);
     const count = (favoriteMeals.get(key)?.count ?? 0) + 1;
@@ -104,11 +129,12 @@ export function getPetState(pet, meals, { now = Date.now() } = {}) {
   if (tummy === 'peckish') speech = 'I could go for a bite. What did you eat?';
   if (tummy === 'full') speech = 'I am soooo full. Got something for later?';
   if (craving) speech = `I keep thinking about ${craving}. Any chance there’s more?`;
-  return { tummy, mood, bodyCondition, fullness: Math.round(state.fullness), craving, speech };
+  const nutritionalValue = nutritionWeight ? Math.round(nutritionTotal / nutritionWeight) : null;
+  return { tummy, mood, bodyCondition, fullness: Math.round(state.fullness), nutritionalValue, craving, speech };
 }
 
 export function feedingSpeech(meal, previousMeals, pet) {
-  const nutrition = meal.nutrition ?? interpretMeal(meal);
+  const nutrition = mealNutrition(meal);
   const preference = taste(pet, nutrition);
   const before = getPetState(pet, previousMeals.filter(({ id }) => id !== meal.id), {
     now: Date.parse(meal.eatenAt),

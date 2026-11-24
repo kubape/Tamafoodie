@@ -1,4 +1,4 @@
-import { creatures, interpretMeal } from './game.js';
+import { creatures, interpretMeal, mealNutrition } from './game.js';
 
 const DATABASE = 'scraps';
 const VERSION = 2;
@@ -92,7 +92,7 @@ function normalizeIngredients(values) {
 }
 
 function mealWithPhoto(meal, photo) {
-  return { ...meal, nutrition: meal.nutrition ?? interpretMeal(meal), photo: photo ?? null };
+  return { ...meal, nutrition: mealNutrition(meal), photo: photo ?? null };
 }
 
 export function load() {

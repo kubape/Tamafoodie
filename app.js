@@ -4,10 +4,12 @@ import { store } from './store.js';
 
 const screen = document.querySelector('#screen');
 const navigation = document.querySelector('.navigation');
+const routeLink = navigation.querySelector('a');
 const announcement = document.querySelector('#announcement');
 const demo = new URLSearchParams(location.search).get('demo') === '1';
 const dayFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'full' });
 const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' });
+const estimateFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const photoURLs = new Set();
 const photoInputs = [...document.querySelectorAll('input[type=file]')];
 
@@ -85,6 +87,21 @@ function mealInProgress() {
   return mealScene && mealScene.phase !== 'done';
 }
 
+function updateMeter(key, score) {
+  const group = screen.querySelector(`[data-meter="${key}"]`);
+  const meter = group.querySelector('meter');
+  const value = Number.isFinite(score) ? Math.round(Math.min(100, Math.max(0, score))) : null;
+  meter.hidden = value === null;
+  group.querySelector('.meter-value').textContent = value === null ? 'Unavailable' : `${value}%`;
+  group.querySelector('.meter-value').setAttribute('aria-hidden', String(value !== null));
+  group.style.setProperty('--score', `${value ?? 0}%`);
+  group.classList.toggle('meter-unavailable', value === null);
+  if (value !== null) {
+    meter.value = value;
+    meter.setAttribute('aria-valuetext', `${value} percent`);
+  }
+}
+
 function updateScene() {
   const scene = screen.querySelector('.habitat');
   if (!scene) return;
@@ -104,7 +121,8 @@ function updateScene() {
   condition.textContent = `${view.label} · ${view.bodyLabel}`;
   condition.dataset.mood = view.mood;
   screen.querySelector('h1').textContent = mealInProgress() ? `A bite for ${state.pet.name}.` : view.title;
-  screen.querySelector('.talk-hint').hidden = talking;
+  updateMeter('fullness', view.fullness);
+  updateMeter('nutrition', view.nutritionalValue);
   dialogue.hidden = !talking;
   dialogue.querySelector('.speaker').textContent = state.pet.name;
   dialogue.querySelector('.dialogue-line').textContent = {
@@ -172,33 +190,56 @@ function playMealScene(photo, ascii, reaction) {
 function renderPet() {
   screen.innerHTML = `
     <div class="screen-bar"><span class="eyebrow">Habitat</span><span class="condition"></span></div>
-    <figure class="habitat">
+    <div class="habitat">
       <div class="habitat-interior">
-        <button type="button" class="creature-touch" aria-controls="pet-dialogue">
-          <span class="creature" aria-hidden="true"></span>
-          <span class="talk-hint" aria-hidden="true">[ Tap to talk ]</span>
-        </button>
-        <div class="scene-food" aria-hidden="true" hidden><img alt="" hidden><pre hidden></pre></div>
-        <div class="scene-floor" aria-hidden="true"></div>
+        <div class="scene-stage">
+          <button type="button" class="creature-touch" aria-controls="pet-dialogue">
+            <span class="creature" aria-hidden="true"></span>
+          </button>
+          <div class="scene-food" aria-hidden="true" hidden><img alt="" hidden><pre hidden></pre></div>
+          <div class="scene-floor" aria-hidden="true"></div>
+        </div>
+        <section class="dialogue" id="pet-dialogue" aria-labelledby="speaker" aria-describedby="pet-speech" tabindex="-1" hidden>
+          <h2 id="speaker" class="speaker"></h2><p id="pet-speech" class="dialogue-line"></p>
+          <div class="picker-buttons">
+            <button class="button primary" type="button" data-picker="camera">Take photo</button>
+            <button class="button" type="button" data-picker="library">Choose photo</button>
+          </div>
+          <p class="message" data-photo-error role="alert"></p>
+          <div class="dialogue-actions">
+            <a class="text-button resume-draft" href="#feed" hidden>Resume meal</a>
+            <button type="button" class="text-button close-dialogue">Later</button>
+          </div>
+        </section>
       </div>
-    </figure>
+    </div>
     <div class="scene-caption"><h1></h1></div>
-    <section class="dialogue" id="pet-dialogue" aria-labelledby="speaker" aria-describedby="pet-speech" tabindex="-1" hidden>
-      <h2 id="speaker" class="speaker"></h2><p id="pet-speech" class="dialogue-line"></p>
-      <div class="picker-buttons">
-        <button class="button primary" type="button" data-picker="camera">Take photo</button>
-        <button class="button" type="button" data-picker="library">Choose photo</button>
+    <div class="pet-meters">
+      <div class="pet-meter" data-meter="fullness">
+        <span class="meter-label" id="fullness-label">Fullness</span><span class="meter-value"></span>
+        <meter aria-labelledby="fullness-label" class="sr-only" min="0" max="100"></meter>
+        <span class="meter-track" aria-hidden="true"></span>
       </div>
-      <p class="message" data-photo-error role="alert"></p>
-      <div class="dialogue-actions">
-        <a class="text-button resume-draft" href="#feed" hidden>Resume meal</a>
-        <button type="button" class="text-button close-dialogue">Later</button>
+      <div class="pet-meter" data-meter="nutrition">
+        <span class="meter-label" id="nutrition-label">Nutritional value</span><span class="meter-value"></span>
+        <meter aria-labelledby="nutrition-label" class="sr-only" min="0" max="100"></meter>
+        <span class="meter-track" aria-hidden="true"></span>
       </div>
-    </section>`;
+    </div>`;
   const talk = screen.querySelector('.creature-touch');
   const dialogue = screen.querySelector('.dialogue');
   talk.addEventListener('click', () => {
-    if (!mealInProgress()) setTalking(!talking);
+    if (mealInProgress()) return;
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const creature = talk.querySelector('.creature');
+      creature.getAnimations().forEach((animation) => animation.cancel());
+      creature.animate([
+        { transform: 'translateY(0)' },
+        { transform: 'translateY(-9px) scale(1.03)', offset: 0.4 },
+        { transform: 'translateY(0)' },
+      ], { duration: 240, easing: 'ease-out' });
+    }
+    setTalking(!talking);
   });
   dialogue.querySelector('.close-dialogue').addEventListener('click', () => {
     if (mealInProgress()) finishMealScene(mealScene);
@@ -231,7 +272,8 @@ function renderPet() {
 }
 
 function parseIngredients(text) {
-  return [...new Set(text.split(/[,\n]/).map((value) => value.trim()).filter(Boolean))];
+  const entries = text.match(/(?:\d,\d+\s*(?:kg|g|oz)\b|[^,\n])+/gi) ?? [];
+  return [...new Set(entries.map((value) => value.trim()).filter(Boolean))];
 }
 
 function loadPhoto(file) {
@@ -446,7 +488,6 @@ function renderMeals() {
       <div class="empty">
         <pre aria-hidden="true">.-----------.\n(             )\n '-._______.-'</pre>
         <h2>No meals yet</h2><p>Tap your Scraps in the habitat to share a meal.</p>
-        <a href="#pet" class="button primary">Back to pet</a>
       </div>`;
     return;
   }
@@ -487,12 +528,27 @@ const nutritionLabels = {
   unknown: 'Meal type unclear',
 };
 
+const estimateFields = [
+  ['servingGrams', 'Serving', 'g'],
+  ['calories', 'Calories', 'kcal'],
+  ['carbs', 'Carbs', 'g'],
+  ['sugars', 'Sugars', 'g'],
+  ['fat', 'Fat', 'g'],
+  ['protein', 'Protein', 'g'],
+  ['fiber', 'Fiber', 'g'],
+];
+
 function renderDetail(meal) {
   screen.innerHTML = `
     <div class="screen-bar"><span class="eyebrow">Food log</span><a href="#meals" class="button">Back to meals</a></div>
     <div class="intro"><h1></h1><p><time></time></p><p class="meal-nutrition"></p></div>
     <div class="meal-content">
       <img class="meal-photo">
+      <section class="nutrition-section" aria-labelledby="nutrition-heading">
+        <h2 id="nutrition-heading">Approximate nutrition</h2>
+        <p class="estimate-note"></p>
+        <dl class="estimate-values" hidden></dl>
+      </section>
       <section class="ingredient-section" aria-labelledby="ingredient-heading">
         <h2 id="ingredient-heading">Ingredients</h2>
         <div class="ingredient-view">
@@ -521,7 +577,33 @@ function renderDetail(meal) {
   time.dateTime = meal.eatenAt;
   time.textContent = dayFormat.format(new Date(meal.eatenAt));
   const nutrition = screen.querySelector('.meal-nutrition');
-  const updateNutrition = () => { nutrition.textContent = nutritionLabels[meal.nutrition.kind]; };
+  const estimateNote = screen.querySelector('.estimate-note');
+  const estimateValues = screen.querySelector('.estimate-values');
+  function updateNutrition() {
+    const estimate = meal.nutrition?.estimate;
+    nutrition.textContent = nutritionLabels[meal.nutrition?.kind] ?? '';
+    nutrition.hidden = !nutrition.textContent;
+    estimateValues.hidden = !estimate;
+    if (!estimate) {
+      estimateNote.textContent = 'Estimate unavailable for this meal.';
+      estimateValues.replaceChildren();
+      return;
+    }
+
+    estimateNote.textContent = estimate.basis === 'ingredients'
+      ? 'Based on recognized ingredients.'
+      : 'Based on a typical recipe.';
+    const rows = estimateFields.map(([key, label, unit]) => {
+      const row = document.createElement('div');
+      const term = document.createElement('dt');
+      const value = document.createElement('dd');
+      term.textContent = label;
+      value.textContent = Number.isFinite(estimate[key]) ? `${estimateFormat.format(estimate[key])} ${unit}` : 'Unavailable';
+      row.append(term, value);
+      return row;
+    });
+    estimateValues.replaceChildren(...rows);
+  }
   updateNutrition();
   const photo = screen.querySelector('.meal-photo');
   if (meal.photo) {
@@ -595,12 +677,11 @@ function render(focus) {
     route = 'pet';
     if (location.hash && location.hash !== '#pet') history.replaceState(null, '', '#pet');
   }
-  const showNavigation = Boolean(state.pet) && (route === 'pet' || route === 'meals');
-  navigation.hidden = !showNavigation;
-  for (const link of navigation.querySelectorAll('a')) {
-    if (link.hash === `#${route}`) link.setAttribute('aria-current', 'page');
-    else link.removeAttribute('aria-current');
-  }
+  navigation.hidden = !state.pet || (route !== 'pet' && route !== 'meals');
+  const target = route === 'meals' ? 'pet' : 'meals';
+  routeLink.href = `#${target}`;
+  routeLink.querySelector('.icon').className = `icon icon-${target}`;
+  routeLink.querySelector('.navigation-label').textContent = target === 'pet' ? 'Back to pet' : 'Meals';
   if (!state.pet) renderAdoption();
   else if (route === 'feed') renderFeed();
   else if (route === 'meals') renderMeals();

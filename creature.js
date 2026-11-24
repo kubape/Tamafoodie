@@ -122,6 +122,8 @@ export function getCreature(pet, meals, { now = Date.now(), override, chewing = 
     label, mood, description, title: `${pet.name} ${status}`,
     speech: override ? demoSpeech[mood] : state.speech,
     bodyLabel: bodyLabels[state.bodyCondition],
+    fullness: state.fullness,
+    nutritionalValue: state.nutritionalValue,
     art: lines.map((line) => line.padEnd(23)).join('\n'),
   };
 }

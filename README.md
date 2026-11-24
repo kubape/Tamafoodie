@@ -10,9 +10,9 @@ For GitHub Pages, set **Settings → Pages → Deploy from a branch** to `main` 
 
 ## Screens and interactions
 
-- **Adopt and pet home.** Tap one of six miniature Scraps to adopt it. Tap the creature in its habitat to hear what it says when hungry, full, or craving a particular dish. Appearance and screen reader descriptions follow its mood. The creature grows tufts after three meals.
+- **Adopt and pet home.** Tap one of six miniature Scraps to adopt it. Tap the creature in its habitat to open a speech bubble and see what it says when hungry, full, or craving a dish. The habitat has fullness and nutritional value meters and a bottom Meals control.
 - **Share a meal.** The dialogue offers camera and photo library options. Choose a photo, supply a title, and optionally add ingredients separated by commas or new lines. After saving, the habitat shows the photo turn into ASCII, then the creature takes a bite and reacts. The animation can be skipped and respects reduced-motion preferences. A failed save keeps the draft ready to retry in the current session.
-- **Meal history and detail.** History starts empty and groups saved meals newest first by the device’s local date. Thumbnails, titles, and times support scanning. Open a meal to see the full photo and add, edit, or clear its ingredients.
+- **Meal history and detail.** History starts empty and groups saved meals by the device’s local date. Open a meal to see the photo, a per-serving nutrition estimate when available, and its editable ingredients. Use the bottom control to return to the creature.
 
 ## Data records and storage
 
@@ -20,7 +20,7 @@ For GitHub Pages, set **Settings → Pages → Deploy from a branch** to `main` 
 | --- | --- |
 | Pet | `id`, `name`, `variant` (optional on older records), `adoptedAt`, `lastFedAt` (nullable), `mealsFed` |
 | Meal | `id`, `title`, `ingredients` (`string[]`), `photo` (`File` or `Blob`), `eatenAt`, `nutrition` |
-| Creature view | `mood`, `label`, `title`, `speech`, `description`, `art`, `bodyLabel` |
+| Creature view | `mood`, `label`, `title`, `speech`, `description`, `art`, `bodyLabel`, `fullness`, `nutritionalValue` |
 
 Timestamps are ISO strings. `eatenAt` uses save time. The game estimates the meal type from the title and ingredients. Each creature has food preferences and can learn to crave repeat meals. The habitat shows tummy state and body condition as meals and elapsed time change them.
 
